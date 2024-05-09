@@ -1,4 +1,7 @@
 import os
+import torch
+torch.cuda.device_count()
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"  
 import argparse
 from tqdm import tqdm
 import math
@@ -6,14 +9,13 @@ from sklearn import metrics
 from email import parser
 from optparse import Option
 from sklearn.metrics import recall_score, precision_score
-import pandas as pd 
+import pandas as pd  
 import torch.nn as nn  
 import torch.optim as optim
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as TF
 from torch.optim.lr_scheduler import MultiStepLR
 from torch.utils.data import DataLoader, Dataset
-
 
 from dataset_h5f import BasicDataset
 from metrics import *
@@ -42,12 +44,10 @@ def eval(model, eval_loader, criterion):
             y_true.append(label)
             y_pred.append(pred) 
             
-
         running_loss.update(loss.item(), image.size(0))
         running_acc.update(acc, image.size(0))
         running_precision+=metrics.precision_score(label.data.cpu().numpy(), pred.cpu().numpy())  #精确率
         running_recall+=metrics.recall_score(label.data.cpu().numpy(), pred.cpu().numpy())   #召回率
-        # break
 
     epoch_loss = running_loss.get_average()
     epoch_acc = running_acc.get_average()
@@ -61,45 +61,42 @@ def eval(model, eval_loader, criterion):
 
     return epoch_loss, epoch_acc,epoch_recall,epoch_precision
 
-
-
 # load data 
-df = pd.read_csv('./Tools/Data.csv') 
-df_shuffle = df.sample(frac=1, random_state=100) 
-split_idx = int(len(df_shuffle) * 0.7) 
-df_train = df_shuffle.iloc[:split_idx] 
-df_test = df_shuffle.iloc[split_idx:]
+df_train = pd.read_csv('./Data/Data_train.csv') 
+df_test = pd.read_csv('./Data/Data_test.csv') 
 
-train_data_path = list(df_train['data_path'])
-train_labels = list(df_train['label_list'])
+train_data_path = list(df_train['path'])  
+train_labels = list(df_train['label'])    
 
-test_data_path = list(df_test['data_path'])
-test_labels = list(df_test['label_list'])
+test_data_path = list(df_test['path'])
+test_labels = list(df_test['label'])
 
 
 train_transform = 1
 test_transform = None
 
 from h5fMake import *
+k_threshold=4
+# We have created a small sample of h5f files. You can also remove the comments and create it yourself. Pay attention to replacing the path.
+# prepareHDData(data_path = train_data_path,labels = train_labels,data_type='train',k_threshold=k_threshold)
+# prepareHDData(data_path=test_data_path,labels=test_labels,data_type='test',k_threshold=k_threshold)
 
 print("H5fMake Successful!")
 
+train_set = BasicDataset(train_data_path, train_labels, data_type='train',transform=train_transform,k_threshold=k_threshold)
+test_set = BasicDataset(test_data_path, test_labels, data_type='test',transform=test_transform,k_threshold=k_threshold)
 
-train_set = BasicDataset(train_data_path, train_labels, data_type='train',transform=train_transform)
-test_set = BasicDataset(test_data_path, test_labels, data_type='test',transform=test_transform)
+train_loader = DataLoader(train_set, batch_size=8, shuffle=True, num_workers=0) 
+test_loader = DataLoader(test_set, batch_size=8, shuffle=False, num_workers=0) 
 
-train_loader = DataLoader(train_set, batch_size=3, shuffle=True, num_workers=0) 
-test_loader = DataLoader(test_set, batch_size=3, shuffle=False, num_workers=0) 
-
-
-
-model = generate_model(model_depth=101, n_input_channels=1, n_classes=2).cuda() 
+model = generate_model(model_depth=101, n_input_channels=1, n_classes=2).cuda()  
 parser = argparse.ArgumentParser(description="JackNet_Train")
 parser.add_argument("--milestone", type=int, default=[30,50,80], help="When to decay learning rate")
 opt = parser.parse_args()
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(params=model.parameters(), lr=1e-4)
-scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=opt.milestone, gamma=0.2)
+optimizer = optim.Adam(params=model.parameters(), lr=1e-4) 
+scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=opt.milestone, gamma=0.2)  
+
 
 epochs = 100  
 steps_per_epoch = 10
@@ -108,33 +105,34 @@ num_iter = math.ceil((epochs * steps_per_epoch) / len(train_loader))
 global_step = 0
 global_epoch = 0
 
-running_loss = AverageMeter() 
+running_loss = AverageMeter()  
 running_acc = AverageMeter()
 
-model.train() 
-Loss = [1]
+model.train() # 激活这个模型
+Loss = [1] # 初始化变量
 Acc = [0]
 TestLoss = [1]
 TestAcc = [0]
-Note=open('./Result/HD0108.txt','a') 
-Note.truncate(0)
 
-initial_epoch = findLastCheckpoint(save_dir="/./Result/logs")
-if initial_epoch > 0:
+initial_epoch=0
+save_dir="./Result"
+if not os.path.exists(save_dir):
+    os.makedirs(save_dir)
+initial_epoch = findLastCheckpoint(save_dir=save_dir)  # 存net地址
+if initial_epoch > 0:   # 读取最新的epoch
     print('resuming by loading epoch %d' % initial_epoch)
-    model.load_state_dict(torch.load(os.path.join("/./Result/logs", 'net_epoch%d.pth' % initial_epoch)))
-
+    model.load_state_dict(torch.load(os.path.join(save_dir, 'net_epoch%d.pth' % initial_epoch)))
+global_epoch = initial_epoch
 
 numsForAll=0
 if __name__ == '__main__':
-
-    for i in range(1000):
+    for i in range(initial_epoch,100):     
+        print("EPOCH ",i)
         for data in tqdm(train_loader):
 
             global_step += 1
 
-            image, label = data 
-
+            image, label = data  
             image = image.cuda() 
             label = label.cuda()
 
@@ -150,11 +148,10 @@ if __name__ == '__main__':
 
             running_loss.update(loss.item(), image.size(0))
             running_acc.update(acc, image.size(0))
-            print("Epoch ",i)
+            
 
-        if i+1%100:
-            torch.save(model.state_dict(), os.path.join("./Result/logs", 'net_epoch%d.pth' % (i+1)))
-            torch.save(model.state_dict(), os.path.join("./Result/logs", 'net_latest.pth'))
+        torch.save(model.state_dict(), os.path.join(save_dir, 'net_epoch%d.pth' % (i+1)))   
+        torch.save(model.state_dict(), os.path.join(save_dir, 'net_latest.pth'))
 
         test_precision=0.0
         test_recall=0.0
@@ -178,25 +175,7 @@ if __name__ == '__main__':
             TestAcc.append(epoch_test_acc)
             print(msg)
 
-            Note=open('./Result/HD0402.txt','a')
+            Note=open(save_dir+'/train.txt','a')
             Note.write("epoch: %d, trian_loss: %.4f, trian_acc: %.4f, test_loss: %.4f, test_acc: %.4f,recall:%.4f,precision:%.4f\n" % (global_epoch, epoch_loss, epoch_acc, epoch_test_loss, epoch_test_acc,epoch_recall,epoch_precision)  )      
     
-        import matplotlib.pyplot as plt
-        plt.figure(1)
-        plt.plot(Loss, label='train loss')
-        plt.plot(TestLoss, label='test loss')
-        plt.title('Loss curve')
-        plt.xlabel('epochs')
-        plt.ylabel('accuracy')
-        plt.legend()
-        plt.savefig("./Result/TestAccCurve_0402_roed.png")
-
-        plt.figure(2)
-        plt.plot(Acc, label='train accuracy')
-        plt.plot(TestAcc, label='test accuracy')
-        plt.title('Accuracy curve')
-        plt.xlabel('epochs')
-        plt.ylabel('accuracy')
-        plt.legend()
-        plt.savefig("./Result/TrainAccCurve_0402_roed.png")
 
